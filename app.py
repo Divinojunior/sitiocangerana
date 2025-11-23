@@ -113,4 +113,50 @@ margem_lucro = (lucro_operacional / receita_bruta) * 100 if receita_bruta > 0 el
 
 # Métricas no topo
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Produ
+c1.metric("Produção Diária", f"{producao_dia:,.0f} L")
+c2.metric("Receita Mensal", f"R$ {receita_bruta:,.2f}")
+c3.metric("Custo Alimentação", f"R$ {custo_conc_mensal:,.2f}")
+c4.metric("Lucro Operacional", f"R$ {lucro_operacional:,.2f}", delta=f"{margem_lucro:.1f}%")
+
+# Colunas para gráficos
+col_graf1, col_graf2 = st.columns([2, 1])
+
+with col_graf1:
+    st.subheader("DRE Visual")
+    fig = go.Figure(go.Waterfall(
+        name = "DRE", orientation = "v",
+        measure = ["relative", "relative", "relative", "total"],
+        x = ["Receita", "Custo Var.", "Custo Fixo", "Lucro"],
+        textposition = "outside",
+        text = [f"{receita_bruta/1000:.1f}k", f"-{custo_variavel_total/1000:.1f}k", f"-{custos_fixos_estimados/1000:.1f}k", f"{lucro_operacional/1000:.1f}k"],
+        y = [receita_bruta, -custo_variavel_total, -custos_fixos_estimados, lucro_operacional],
+        connector = {"line":{"color":"rgb(63, 63, 63)"}},
+    ))
+    st.plotly_chart(fig, use_container_width=True)
+
+with col_graf2:
+    st.subheader("Ponto de Equilíbrio")
+    # Cálculo PE
+    margem_unit = (receita_bruta - custo_variavel_total) / producao_mensal if producao_mensal > 0 else 0
+    pe_litros_mes = custos_fixos_estimados / margem_unit if margem_unit > 0 else 0
+    pe_litros_dia = pe_litros_mes / 30
+    
+    st.metric("Meta Zero a Zero", f"{pe_litros_dia:,.0f} L/dia")
+    
+    delta = producao_dia - pe_litros_dia
+    if delta > 0:
+        st.success(f"Acima da meta: +{delta:.0f} L")
+    else:
+        st.error(f"Faltam: {delta:.0f} L")
+
+# --- 5. DOWNLOAD ---
+st.markdown("### 💾 Salvar Dados")
+df_export = pd.DataFrame({
+    'Cenário': [selected_scenario],
+    'Receita': [receita_bruta],
+    'Lucro': [lucro_operacional],
+    'Litros/Dia': [producao_dia]
+})
+
+csv = df_export.to_csv(index=False).encode('utf-8')
+st.download_button("Baixar Simulação (CSV)", data=csv, file_name="simulacao_cangerana.csv", mime="text/csv")
