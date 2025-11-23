@@ -21,15 +21,14 @@ file_path = 'Demostrativo de resultado v24.xlsx'
 if not os.path.exists(file_path):
     st.error("⚠️ Arquivo Excel não encontrado!")
     st.warning(f"O arquivo '{file_path}' precisa estar na mesma pasta que este script 'app.py'.")
-    st.stop() # Para a execução aqui se não achar o arquivo
+    st.stop()
 
-# --- SE O ARQUIVO EXISTE, O CÓDIGO SEGUE AQUI (SEM INDENTAÇÃO EXTRA) ---
-
+# --- SE O ARQUIVO EXISTE, O CÓDIGO SEGUE AQUI ---
 try:
     xls = load_data(file_path)
     all_sheet_names = xls.sheet_names
     
-    # Filtra abas que não queremos
+    # Filtra abas que não queremos (ajuste conforme o nome real das suas abas)
     scenarios = [s for s in all_sheet_names if s not in ['DRE', 'Dados_Unificados', 'Resumo', 'Planilha1']]
     
     # --- BARRA LATERAL ---
@@ -55,6 +54,7 @@ def get_val(df, search_term, default=0.0):
                 if col_idx + 1 < len(df.columns):
                     val = matches.iloc[0, col_idx + 1]
                     if isinstance(val, str):
+                        # Limpa caracteres de moeda se houver
                         val = val.replace('R$', '').replace(',', '.').strip()
                     return float(val)
         return default
@@ -98,5 +98,19 @@ custo_conc_mensal = consumo_conc_dia * 30 * custo_concentrado
 outros_custos_var = receita_bruta * 0.10 
 custo_variavel_total = custo_conc_mensal + outros_custos_var
 
-# Margem de contribuição
-margem_contribuicao = receita_br
+# Margem de contribuição (CORREÇÃO AQUI: receita_bruta estava cortado)
+margem_contribuicao = receita_bruta - custo_variavel_total
+
+# Custos Fixos
+salario_minimo = get_val(df_raw, "Salário mínimo", 1412.0)
+custos_fixos_estimados = (salario_minimo * 3) + 5000 # Estimativa baseada no seu DRE
+
+# Resultado Final
+lucro_operacional = margem_contribuicao - custos_fixos_estimados
+margem_lucro = (lucro_operacional / receita_bruta) * 100 if receita_bruta > 0 else 0
+
+# --- 4. DASHBOARD (VISUALIZAÇÃO) ---
+
+# Métricas no topo
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Produ
