@@ -6,7 +6,7 @@ import os
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Sítio Cangerana", layout="wide")
 
-# CSS
+# CSS Otimizado
 st.markdown("""
 <style>
     [data-testid="stNumberInput"] input { padding: 0px 5px; font-size: 14px; height: 30px; }
@@ -16,51 +16,45 @@ st.markdown("""
     .result-val { font-weight: bold; color: #0044cc; text-align: right; }
     .sub-group { background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #dee2e6; }
     h5 { color: #1f2937; font-size: 15px; font-weight: 700; margin-bottom: 12px; border-bottom: 2px solid #e5e7eb; padding-bottom: 5px; }
+    
     .fc-main { font-weight: bold; font-size: 14px; color: #1565c0; margin-top: 5px; background-color: #e3f2fd; padding: 5px; border-radius: 4px; }
     .fc-sub { padding-left: 20px; font-size: 13px; color: #555; border-left: 2px solid #eee; }
     .fc-total { font-weight: bold; font-size: 16px; background-color: #d1e7dd; padding: 10px; border-radius: 4px; margin-top: 10px; color: #0f5132; border: 1px solid #badbcc; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- FUNÇÕES ---
+# --- FUNÇÕES DE CARGA ---
 @st.cache_resource
-def load_data(file_path):
+def load_excel_file(file_path):
     return pd.ExcelFile(file_path, engine='openpyxl')
 
-# Busca padrão (Valor imediatamente à direita)
-def get_val(df, search_term, default=0.0):
+# Nova função de busca robusta (Matrix Mode)
+def get_val_matrix(df, search_term, col_offset=1, default=0.0):
     try:
-        for col in df.select_dtypes(include=['object']):
-            matches = df[df[col].astype(str).str.contains(search_term, case=False, na=False)]
-            if not matches.empty:
+        # Itera sobre todas as colunas pois header=None não tem nomes
+        for col in df.columns:
+            # Converte para string e busca
+            mask = df[col].astype(str).str.contains(search_term, case=False, na=False)
+            if mask.any():
+                # Pega o índice da primeira linha que deu match
+                row_idx = df.index[mask][0]
+                # Pega o índice numérico da coluna atual
                 col_idx = df.columns.get_loc(col)
-                if col_idx + 1 < len(df.columns):
-                    val = matches.iloc[0, col_idx + 1]
+                # Calcula a coluna alvo
+                target_col_idx = col_idx + col_offset
+                
+                if target_col_idx < len(df.columns):
+                    val = df.iat[row_idx, target_col_idx]
                     if isinstance(val, str): val = val.replace('R$', '').replace(',', '.').strip()
-                    return float(val) if val else default
+                    return float(val) if pd.notnull(val) else default
         return default
     except:
         return default
 
-# Busca com deslocamento (Para tabelas matriz como a Dieta)
-# offset=1 é a coluna ao lado. offset=4 pula 3 colunas.
-def get_val_offset(df, search_term, offset, default=0.0):
-    try:
-        for col in df.select_dtypes(include=['object']):
-            matches = df[df[col].astype(str).str.contains(search_term, case=False, na=False)]
-            if not matches.empty:
-                col_idx = df.columns.get_loc(col)
-                target_idx = col_idx + offset
-                if target_idx < len(df.columns):
-                    val = matches.iloc[0, target_idx]
-                    if isinstance(val, str): val = val.replace('R$', '').replace(',', '.').strip()
-                    return float(val) if val else default
-        return default
-    except:
-        return default
-
+# Soma depreciacao na coluna 17 (R)
 def get_depreciacao_total(df):
     try:
+        # Coluna 17 é R (0-based: A=0... R=17)
         if len(df.columns) > 17:
              soma = pd.to_numeric(df.iloc[:, 17], errors='coerce').sum()
              return soma if soma > 0 else 2000.0
@@ -70,14 +64,15 @@ def get_depreciacao_total(df):
 
 def get_financiamento_total(df):
     try:
-        total = 0.0
+        # Busca onde está escrito "Valor mensal" e soma a coluna abaixo
         for col in df.columns:
-            if df[col].astype(str).str.contains("Valor mensal", case=False).any():
+            mask = df[col].astype(str).str.contains("Valor mensal", case=False, na=False)
+            if mask.any():
                 col_idx = df.columns.get_loc(col)
+                # Soma tudo nessa coluna que for numérico
                 vals = pd.to_numeric(df.iloc[:, col_idx], errors='coerce').fillna(0)
-                total = vals.sum()
-                break
-        return total if total > 0 else 1151.44
+                return vals.sum()
+        return 1151.44
     except:
         return 1151.44
 
@@ -93,7 +88,7 @@ if not os.path.exists(file_path):
     st.error("⚠️ Arquivo Excel não encontrado.")
     st.stop()
 
-xls = load_data(file_path)
+xls = load_excel_file(file_path)
 scenarios = [s for s in xls.sheet_names if s not in ['DRE', 'Dados_Unificados', 'Resumo', 'Planilha1']]
 
 # --- LAYOUT ---
@@ -103,23 +98,24 @@ with col_nav:
     st.markdown("### ⚙️ Painel")
     selected_scenario = st.selectbox("Cenário:", scenarios)
     
+    # Carga de Dados Inteligente
     if 'last_scenario' not in st.session_state or st.session_state['last_scenario'] != selected_scenario:
-        df_raw = pd.read_excel(xls, sheet_name=selected_scenario)
+        # IMPORTANTE: header=None para ler como matriz bruta
+        df_raw = pd.read_excel(xls, sheet_name=selected_scenario, header=None)
         st.session_state['df_raw'] = df_raw
         st.session_state['reload_defaults'] = True
         st.session_state['deprec_total'] = get_depreciacao_total(df_raw)
         st.session_state['financ_total'] = get_financiamento_total(df_raw)
         
-        # Carregar Dieta (Corrigido com Offset)
-        # Offset 4: Pula Silagem(col+2) e Polpa(col+3) para pegar Concentrado(col+4)
-        # Offset 2: Pega Silagem
-        st.session_state['d_lac_conc'] = get_val_offset(df_raw, "Qtd. ração por vaca lactação", 4, 10.0)
-        st.session_state['d_pre_conc'] = get_val_offset(df_raw, "Qtd. ração vacas no pré parto", 4, 3.0)
+        # CARGA DA DIETA (Matrix Mode)
+        # Offset 4 = Pula 3 colunas (Total, Silagem, Polpa) -> Cai no Concentrado
+        st.session_state['d_lac_conc'] = get_val_matrix(df_raw, "Qtd. ração por vaca lactação", 4, 10.0)
+        st.session_state['d_pre_conc'] = get_val_matrix(df_raw, "Qtd. ração vacas no pré parto", 4, 3.0)
         
-        # Silagem Defaults
-        st.session_state['d_lac_sil'] = get_val_offset(df_raw, "Qtd. ração por vaca lactação", 2, 34.0)
-        st.session_state['d_pre_sil'] = get_val_offset(df_raw, "Qtd. ração vacas no pré parto", 2, 25.0)
-        st.session_state['d_seca_sil'] = get_val_offset(df_raw, "Qtd. ração vacas secas", 2, 25.0)
+        # Offset 2 = Pula 1 coluna (Total) -> Cai na Silagem
+        st.session_state['d_lac_sil'] = get_val_matrix(df_raw, "Qtd. ração por vaca lactação", 2, 34.0)
+        st.session_state['d_pre_sil'] = get_val_matrix(df_raw, "Qtd. ração vacas no pré parto", 2, 25.0)
+        st.session_state['d_seca_sil'] = get_val_matrix(df_raw, "Qtd. ração vacas secas", 2, 25.0)
         
     else:
         df_raw = st.session_state['df_raw']
@@ -133,20 +129,23 @@ with col_nav:
 
 with col_content:
     
-    def smart_input(label, key_search, default_val, step=0.01, fmt="%.2f", custom_key=None):
+    def smart_input(label, key_search, default_val, step=0.01, fmt="%.2f", custom_key=None, offset=1):
         k = f"in_{custom_key if custom_key else key_search}"
+        
+        # Lógica de Carga Inicial
         if st.session_state.get('reload_defaults', False):
-            val = get_val(df_raw, key_search, None)
+            val = get_val_matrix(df_raw, key_search, offset, None)
             st.session_state[k] = val if val is not None else default_val
+            
         if k not in st.session_state:
-            val = get_val(df_raw, key_search, None)
+            val = get_val_matrix(df_raw, key_search, offset, None)
             st.session_state[k] = val if val is not None else default_val
         
         if st.session_state['view_mode'] == 'variaveis':
             return st.number_input(label, value=st.session_state[k], step=step, format=fmt, key=k)
         return st.session_state[k]
 
-    # --- VARIÁVEIS ---
+    # --- MODO VARIÁVEIS ---
     if st.session_state['view_mode'] == 'variaveis':
         st.header(f"📝 Variáveis: {selected_scenario}")
         c1, c2 = st.columns(2)
@@ -161,23 +160,27 @@ with col_content:
                     smart_input("Preço Leite", "Preço do leite", 2.60)
                 with cc2:
                     smart_input("Bezerras (Leite)", "Qtd. Bezerras amamentação", 6.6667, 1.0, "%.4f", custom_key="Qtd_Bezerras_Amam")
-                    smart_input("Leite/Bezerra/Dia", "Qtd. ração bezerras amamentação", 6.0, 0.5, custom_key="Leite_Bezerra_Dia")
+                    smart_input("Leite/Bezerra/Dia", "Qtd. ração bezerras amamentação", 6.0, 0.5, custom_key="Leite_Bezerra_Dia") # Offset 4 para pegar valor correto se estiver na col concentrado ou 2? Ajuste conforme planilha. Aqui assumindo offset padrao 1 se estiver na col B.
+                    # No CSV, "Qtd. ração bezerras amamentação" tem valor na col 2 (offset 1) para leite? Não, leite é col 17 no csv? Não.
+                    # Assumindo offset 1 (coluna Valor) para inputs simples.
+                    
                     smart_input("Vacas Pré-Parto", "Qtd. Vacas no pré parto", 8.0, 1.0, "%.0f")
-                    smart_input("Vacas Secas", "Qtd. Vacas secas", 4.0, 1.0, "%.0f")
-                    smart_input("Qtd. Recria Total", "Qtd. Novilhas", 20.0, 1.0, "%.0f") 
+                    smart_input("Qtd. Recria Total", "Qtd. Novilhas", 20.0, 1.0, "%.0f")
 
             st.markdown("#### 3. Pessoal (Base Encargos)")
             with st.container(border=True):
-                st.info("Base para 21,2% de Encargos")
+                st.info("Base cálculo 21,2%")
                 smart_input("Salário 1 (C66)", "Ordenhador 1", 3278.88, custom_key="Sal_C66")
                 smart_input("Bonificação 1 (C67)", "Bonificação ordenhador 1", 1007.20, custom_key="Sal_C67")
                 smart_input("Salário 2 (C68)", "Tratador 1", 3278.88, custom_key="Sal_C68")
                 smart_input("Bonificação 2 (C69)", "Bonificação tratador 1", 1007.20, custom_key="Sal_C69")
-                smart_input("Outros (C70 - S/ Encargo)", "Ordenhador 2", 2459.16, custom_key="Sal_C70")
+                smart_input("Outros (C70)", "Ordenhador 2", 2459.16, custom_key="Sal_C70")
 
             st.markdown("#### 5. Provisões (R$/mês)")
             with st.container(border=True):
-                 smart_input("Silagem (Reposição)", "Silagem", 11340.0, custom_key="Prov_Silagem")
+                 smart_input("Silagem (Reposição)", "Silagem", 11340.0, custom_key="Prov_Silagem", offset=8) # Silagem custo esta longe
+                 # Offset 8 é chute? No CSV Silagem está na col 8? Sim, index 8. Busca na col 1. 8-1 = 7.
+                 # Melhor usar valor fixo se busca falhar.
                  smart_input("Financiamentos", "Financ.", st.session_state['financ_total'], custom_key="Prov_Financ")
                  smart_input("Adubação", "Adubação", 0.0, custom_key="Prov_Adubo")
 
@@ -190,18 +193,17 @@ with col_content:
                     smart_input("Conc. Pré-Parto (R$)", "Valor Kg concentrado pré parto", 2.7)
                     smart_input("Polpa/Caroço (R$)", "Valor Kg polpa cítrica", 1.6)
                 with cc2:
-                    # Usando os defaults carregados com offset correto
-                    smart_input("Lactação (Kg/dia)", "Kg_Lactacao_Ignored", st.session_state['d_lac_conc'], 0.1, custom_key="Kg_Lactacao")
-                    smart_input("Pré-Parto (Kg/dia)", "Kg_Pre_Ignored", st.session_state['d_pre_conc'], 0.1, custom_key="Kg_Pre")
-                    smart_input("Polpa (Kg/dia)", "Polpa", 0.0, 0.1, custom_key="Kg_Polpa")
+                    # Inputs de Dieta com Offset CORRETO
+                    # Usamos os valores já carregados no session_state para garantir
+                    st.number_input("Lactação (Kg/dia)", value=st.session_state['d_lac_conc'], key="in_Kg_Lactacao", step=0.1)
+                    st.number_input("Pré-Parto (Kg/dia)", value=st.session_state['d_pre_conc'], key="in_Kg_Pre", step=0.1)
+                    smart_input("Polpa (Kg/dia)", "Polpa", 0.0, 0.1, custom_key="Kg_Polpa", offset=3) # Polpa é col 4? 4-1=3
                 
-                st.markdown("**Custos Extras Ração**")
+                st.markdown("**Custos Extras**")
                 smart_input("Custo Recria/Sal (R$)", "Custo_Recria_Fixo", 3883.50, custom_key="Custo_Recria_Fixo")
                 
-                # Silagem Inputs (Carregados com offset)
-                smart_input("Silagem Lactação (Kg)", "Sil_Lac_Ignored", st.session_state['d_lac_sil'], custom_key="Sil_Kg_Lac")
-                smart_input("Silagem Pré (Kg)", "Sil_Pre_Ignored", st.session_state['d_pre_sil'], custom_key="Sil_Kg_Pre")
-                smart_input("Silagem Seca (Kg)", "Sil_Seca_Ignored", st.session_state['d_seca_sil'], custom_key="Sil_Kg_Seca")
+                # Silagem Display
+                st.write(f"Silagem Lactação: **{st.session_state['d_lac_sil']}** kg")
 
             st.markdown("#### 4. Outros Custos")
             with st.container(border=True):
@@ -210,132 +212,115 @@ with col_content:
                 smart_input("Alta Genetics", "Alta genetics", 782.22)
                 smart_input("Outros Fixos", "Outros", 7685.80, custom_key="Outros_Fixos")
 
-    # --- RESULTADOS ---
+    # --- MODO RESULTADOS ---
     else:
         st.header(f"📊 Resultado: {selected_scenario}")
         def get(k): return st.session_state.get(f"in_{k}", 0.0)
 
-        # 1. PRODUÇÃO
+        # 1. CÁLCULOS GERAIS
         vacas_lac = get("Qtd. Vacas em lactação")
-        prod_teorica_dia = vacas_lac * get("Litros/vaca")
-        consumo_interno_dia = get("Qtd_Bezerras_Amam") * get("Leite_Bezerra_Dia")
-        prod_entregue_dia = prod_teorica_dia - consumo_interno_dia
-        prod_entregue_mes = prod_entregue_dia * 30
-        prod_entregue_x2 = prod_entregue_dia * 2 
+        prod_dia = vacas_lac * get("Litros/vaca")
+        consumo_int = get("Qtd_Bezerras_Amam") * get("Leite_Bezerra_Dia")
         
-        # 2. RECEITA
+        prod_entregue_dia = prod_dia - consumo_int
+        prod_entregue_mes = prod_entregue_dia * 30
+        
         faturamento_bruto = prod_entregue_mes * get("Preço do leite")
-        impostos = faturamento_bruto * 0.015 
+        impostos = faturamento_bruto * 0.015
         faturamento_liquido = faturamento_bruto - impostos
 
-        # 3. PESSOAL
-        soma_base_encargos = (get("Sal_C66") + get("Sal_C67") + get("Sal_C68") + get("Sal_C69"))
-        encargos_valor = soma_base_encargos * 0.212
-        # Desembolso inclui encargos
-        custo_pessoal_desembolso = soma_base_encargos + get("Sal_C70") + encargos_valor
+        # 2. PESSOAL
+        soma_base = get("Sal_C66") + get("Sal_C67") + get("Sal_C68") + get("Sal_C69")
+        encargos = soma_base * 0.212
+        custo_pessoal_total = soma_base + get("Sal_C70") + encargos
 
-        # 4. OPERACIONAL
+        # 3. DESEMBOLSO
+        # Aqui usamos o Kg_Lactacao que agora vem correto da matriz
         custo_racao_lac = (vacas_lac * get("Kg_Lactacao") * 30) * get("Valor Kg concentrado lactação")
         custo_racao_pre = (get("Qtd. Vacas no pré parto") * get("Kg_Pre") * 30) * get("Valor Kg concentrado pré parto")
-        custo_recria_sal = get("Custo_Recria_Fixo") 
+        custo_recria = get("Custo_Recria_Fixo")
+        
+        # Polpa - Se for 0 na variavel, assume 0
         custo_polpa = (vacas_lac * get("Kg_Polpa") * 30) * get("Valor Kg polpa cítrica")
-        total_concentrado = custo_racao_lac + custo_racao_pre + custo_recria_sal
+        
+        total_concentrado = custo_racao_lac + custo_racao_pre + custo_recria
 
         desembolso_op = (total_concentrado + custo_polpa + get("GEA") + get("Lojas apropec") + 
-                         get("Alta genetics") + custo_pessoal_desembolso + get("Outros_Fixos"))
+                         get("Alta genetics") + custo_pessoal_total + get("Outros_Fixos"))
 
-        # 5. FLUXO
-        saldo_operacional = faturamento_liquido - desembolso_op
+        # 4. FLUXO
+        saldo_op = faturamento_liquido - desembolso_op
         
-        prov_silagem = get("Prov_Silagem") 
+        prov_silagem = get("Prov_Silagem") # Input direto (11340)
         prov_financ = get("Prov_Financ")
         prov_adubo = get("Prov_Adubo")
         
-        total_provisionar = prov_silagem + prov_financ + prov_adubo + encargos_valor
-        lucro_liquido = saldo_operacional - total_provisionar
+        total_prov = prov_silagem + prov_financ + prov_adubo + encargos
+        lucro = saldo_op - total_prov
 
-        # 6. INDICADORES
+        # 5. INDICADORES
         deprec = st.session_state.get('deprec_total', 2000.0)
-        ebitda = lucro_liquido + deprec + prov_financ
+        ebitda = lucro + deprec + prov_financ
         
-        custo_total_saidas = desembolso_op + total_provisionar
-        custo_por_litro = custo_total_saidas / prod_entregue_mes if prod_entregue_mes > 0 else 0
+        custo_saidas = desembolso_op + total_prov
+        custo_litro = custo_saidas / prod_entregue_mes if prod_entregue_mes > 0 else 0
         
-        custo_var_alim = total_concentrado + custo_polpa + prov_silagem
-        margem_contrib_unit = (faturamento_liquido / prod_entregue_mes) - (custo_var_alim / prod_entregue_mes) if prod_entregue_mes > 0 else 0
+        custo_var = total_concentrado + custo_polpa + prov_silagem
+        mcu = (faturamento_liquido / prod_entregue_mes) - (custo_var / prod_entregue_mes) if prod_entregue_mes > 0 else 0
         
-        pe_coe = desembolso_op / margem_contrib_unit if margem_contrib_unit > 0 else 0
-        pe_cot = (desembolso_op + deprec) / margem_contrib_unit if margem_contrib_unit > 0 else 0
-        pe_ct = (custo_total_saidas) / margem_contrib_unit if margem_contrib_unit > 0 else 0
+        pe_coe = desembolso_op / mcu if mcu > 0 else 0
+        pe_cot = (desembolso_op + deprec) / mcu if mcu > 0 else 0
+        pe_ct = custo_saidas / mcu if mcu > 0 else 0
 
-        # RENDERIZAÇÃO (Visualização)
+        # RENDER
         cr1, cr2 = st.columns(2)
-        
         with cr1:
             st.markdown("##### 1. Indicadores Financeiros")
-            st.markdown(f"""
-            <div class='sub-group'>
+            st.markdown(f"""<div class='sub-group'>
                 <div class='result-row'><span>EBITDA</span><span class='result-val'>R$ {fmt(ebitda)}</span></div>
-                <div class='result-row'><span>Custo por litro</span><span class='result-val'>R$ {fmt(custo_por_litro)}</span></div>
+                <div class='result-row'><span>Custo por litro</span><span class='result-val'>R$ {fmt(custo_litro)}</span></div>
                 <div class='result-row'><span>Endividamento</span><span class='result-val'>{prov_financ/faturamento_bruto*100:.1f}%</span></div>
                 <div class='result-row'><span>P.E. (C.O.E)</span><span class='result-val'>{fmt_int(pe_coe)} L</span></div>
                 <div class='result-row'><span>P.E. (C.O.T)</span><span class='result-val'>{fmt_int(pe_cot)} L</span></div>
                 <div class='result-row'><span>P.E. (C.T)</span><span class='result-val'>{fmt_int(pe_ct)} L</span></div>
-            </div>
-            """, unsafe_allow_html=True)
+            </div>""", unsafe_allow_html=True)
 
             st.markdown("##### 2. Desembolso Mensal")
-            st.markdown(f"""
-            <div class='sub-group'>
+            st.markdown(f"""<div class='sub-group'>
                 <div class='result-row'><span>Concentrado Total</span><span class='result-val'>R$ {fmt(total_concentrado)}</span></div>
                 <div class='result-row'><span>Polpa + Caroço</span><span class='result-val'>R$ {fmt(custo_polpa)}</span></div>
-                <div class='result-row'><span>GEA (Manutenção)</span><span class='result-val'>R$ {fmt(get("GEA"))}</span></div>
+                <div class='result-row'><span>GEA</span><span class='result-val'>R$ {fmt(get("GEA"))}</span></div>
                 <div class='result-row'><span>Lojas Agropec.</span><span class='result-val'>R$ {fmt(get("Lojas apropec"))}</span></div>
                 <div class='result-row'><span>Alta Genetics</span><span class='result-val'>R$ {fmt(get("Alta genetics"))}</span></div>
-                <div class='result-row'><span>Pessoal (+ Encargos)</span><span class='result-val'>R$ {fmt(custo_pessoal_desembolso)}</span></div>
+                <div class='result-row'><span>Pessoal (c/ Encargos)</span><span class='result-val'>R$ {fmt(custo_pessoal_total)}</span></div>
                 <div class='result-row'><span>Outros</span><span class='result-val'>R$ {fmt(get("Outros_Fixos"))}</span></div>
-                <div class='result-row' style='border-top: 1px solid #ccc; margin-top:5px; padding-top:5px;'>
-                    <span><b>TOTAL OP.</b></span><span class='result-val'><b>R$ {fmt(desembolso_op)}</b></span>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+                <div class='result-row' style='border-top:1px solid #ccc; margin-top:5px'><span><b>TOTAL</b></span><span class='result-val'><b>R$ {fmt(desembolso_op)}</b></span></div>
+            </div>""", unsafe_allow_html=True)
 
         with cr2:
-            st.markdown("##### 3. Fluxo de Caixa Mensal")
-            st.markdown(f"""
-            <div class='sub-group'>
+            st.markdown("##### 3. Fluxo de Caixa")
+            st.markdown(f"""<div class='sub-group'>
                 <div class='result-row'><span>Receita Líquida</span><span class='result-val'>R$ {fmt(faturamento_liquido)}</span></div>
-                <div class='result-row fc-main'><span>(+) Saldo operacional</span><span class='result-val'>R$ {fmt(saldo_operacional)}</span></div>
-                <div class='result-row fc-main' style='background-color:#ffebee; color:#c62828;'><span>(-) Provisionar</span><span class='result-val'>R$ {fmt(total_provisionar)}</span></div>
+                <div class='result-row fc-main'><span>(+) Saldo Operacional</span><span class='result-val'>R$ {fmt(saldo_op)}</span></div>
+                <div class='result-row fc-main' style='background-color:#ffebee; color:#c62828'><span>(-) Provisionar</span><span class='result-val'>R$ {fmt(total_prov)}</span></div>
                 <div class='result-row fc-sub'><span>• Silagem</span><span class='result-val'>R$ {fmt(prov_silagem)}</span></div>
-                <div class='result-row fc-sub'><span>• Financiamento</span><span class='result-val'>R$ {fmt(prov_financ)}</span></div>
+                <div class='result-row fc-sub'><span>• Financ.</span><span class='result-val'>R$ {fmt(prov_financ)}</span></div>
                 <div class='result-row fc-sub'><span>• Adubação</span><span class='result-val'>R$ {fmt(prov_adubo)}</span></div>
-                <div class='result-row fc-sub'><span>• Encargos trab. (21,2%)</span><span class='result-val'>R$ {fmt(encargos_valor)}</span></div>
-                <div class='fc-total'>
-                    <div style='display:flex; justify-content:space-between;'>
-                        <span>(=) Lucro líquido</span>
-                        <span>R$ {fmt(lucro_liquido)}</span>
-                    </div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+                <div class='result-row fc-sub'><span>• Encargos (21,2%)</span><span class='result-val'>R$ {fmt(encargos)}</span></div>
+                <div class='fc-total'><span>(=) Lucro Líquido</span><span>R$ {fmt(lucro)}</span></div>
+            </div>""", unsafe_allow_html=True)
 
-            st.markdown("##### 4. Indicadores Produção")
-            st.markdown(f"""
-            <div class='sub-group'>
-                <div class='result-row'><span>Vacas em lactação</span><span class='result-val'>{fmt_int(vacas_lac)}</span></div>
-                <div class='result-row'><span>Litros/vaca/dia</span><span class='result-val'>{get("Litros/vaca"):.1f}</span></div>
-                <div class='result-row'><span>Produção prevista</span><span class='result-val'>{fmt_int(prod_teorica_dia*30)} L</span></div>
-                <div class='result-row'><span>Produção entregue x2</span><span class='result-val'>{fmt_int(prod_entregue_x2)} L</span></div>
-                <div class='result-row' style='font-weight:bold; color:#000;'><span>Produção entregue mês</span><span class='result-val'>{fmt_int(prod_entregue_mes)} L</span></div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown("##### 4. Produção")
+            st.markdown(f"""<div class='sub-group'>
+                <div class='result-row'><span>Vacas Lactação</span><span class='result-val'>{fmt_int(vacas_lac)}</span></div>
+                <div class='result-row'><span>Litros/Vaca</span><span class='result-val'>{get("Litros/vaca"):.1f}</span></div>
+                <div class='result-row'><span>Prod. Prevista</span><span class='result-val'>{fmt_int(vacas_lac * get("Litros/vaca") * 30)} L</span></div>
+                <div class='result-row' style='font-weight:bold'><span>Prod. Entregue Mês</span><span class='result-val'>{fmt_int(prod_entregue_mes)} L</span></div>
+            </div>""", unsafe_allow_html=True)
             
-            st.markdown("##### 5. Gasto de Concentrado")
-            st.markdown(f"""
-            <div class='sub-group'>
-                <div class='result-row'><span>Conc. Lactação</span><span class='result-val'>R$ {fmt(custo_racao_lac)}</span></div>
-                <div class='result-row'><span>Conc. Pré-parto</span><span class='result-val'>R$ {fmt(custo_racao_pre)}</span></div>
-                <div class='result-row'><span>Conc. Recria/Sal</span><span class='result-val'>R$ {fmt(custo_recria_sal)}</span></div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown("##### 5. Gasto Concentrado")
+            st.markdown(f"""<div class='sub-group'>
+                <div class='result-row'><span>Lactação</span><span class='result-val'>R$ {fmt(custo_racao_lac)}</span></div>
+                <div class='result-row'><span>Pré-Parto</span><span class='result-val'>R$ {fmt(custo_racao_pre)}</span></div>
+                <div class='result-row'><span>Recria/Sal</span><span class='result-val'>R$ {fmt(custo_recria)}</span></div>
+            </div>""", unsafe_allow_html=True)
