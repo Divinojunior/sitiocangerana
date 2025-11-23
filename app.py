@@ -7,22 +7,44 @@ import os
 st.set_page_config(page_title="Sítio Cangerana", layout="wide")
 
 # --- FUNÇÕES AUXILIARES (TOPO DO CÓDIGO) ---
-# Definidas aqui para evitar NameError
-
 def fmt(val):
     """Formata moeda (R$ 1.000,00)"""
-    if pd.isna(val) or val is None: return "0,00"
-    return f"{float(val):,.2f}"
+    try:
+        if pd.isna(val) or val is None: return "0,00"
+        return f"{float(val):,.2f}"
+    except:
+        return "0,00"
 
 def fmt_int(val):
     """Formata inteiros (1.000)"""
-    if pd.isna(val) or val is None: return "0"
-    return f"{float(val):,.0f}"
+    try:
+        if pd.isna(val) or val is None: return "0"
+        return f"{float(val):,.0f}"
+    except:
+        return "0"
 
-@st.cache_data
+# CORREÇÃO AQUI: Usar cache_resource para arquivos
+@st.cache_resource
 def load_excel_file(file_path):
     """Carrega o Excel como matriz pura (sem cabeçalho)"""
     return pd.ExcelFile(file_path, engine='openpyxl')
+
+def clean_float(val):
+    """Limpa string de moeda para float"""
+    if isinstance(val, (int, float)): return float(val)
+    if isinstance(val, str):
+        try:
+            return float(val.replace('R$', '').replace('.', '').replace(',', '.').strip())
+        except:
+            return 0.0
+    return 0.0
+
+def is_valid(val):
+    """Verifica se é um número válido"""
+    if pd.isna(val) or val == "": return False
+    s = str(val).replace('R$', '').replace('.', '').replace(',', '').strip()
+    # Permite negativos
+    return s.replace('-','').isdigit()
 
 def get_val_matrix(df, search_term, col_offset=1, default=0.0):
     """Busca inteligente na matriz do Excel"""
@@ -49,17 +71,6 @@ def get_val_matrix(df, search_term, col_offset=1, default=0.0):
         return default
     except:
         return default
-
-def is_valid(val):
-    """Verifica se é um número válido"""
-    if pd.isna(val) or val == "": return False
-    s = str(val).replace('R$', '').replace('.', '').replace(',', '').strip()
-    return s.replace('-','').isdigit()
-
-def clean_float(val):
-    """Limpa string de moeda para float"""
-    if isinstance(val, (int, float)): return float(val)
-    return float(str(val).replace('R$', '').replace('.', '').replace(',', '.').strip())
 
 def get_col_sum(df, search_term):
     """Soma uma coluna inteira baseada no cabeçalho"""
@@ -146,7 +157,7 @@ with col_nav:
         load("P_Polpa", "Valor Kg polpa cítrica", 1.6)
         load("P_Silagem", "Valor Ton silagem", 180.0)
 
-        # 4. Nutrição Consumo (Matrix Mode)
+        # 4. Nutrição Consumo (Matrix Mode - Offset corrigido)
         load("Kg_Conc_Lac", "Qtd. ração por vaca lactação", 10.0, offset=4)
         load("Kg_Conc_Pre", "Qtd. ração vacas no pré parto", 3.0, offset=4)
         load("Kg_Polpa", "Polpa", 0.0, offset=3)
@@ -190,6 +201,7 @@ with col_content:
     # Helper: Cria input ligado ao session_state e retorna o valor atualizado
     def smart_input(label, key, step=0.01, fmt="%.2f"):
         full_key = f"in_{key}"
+        # Proteção: se a chave não existir (ex: erro carga), cria com 0
         if full_key not in st.session_state: st.session_state[full_key] = 0.0
         return st.number_input(label, key=full_key, step=step, format=fmt)
 
@@ -247,7 +259,7 @@ with col_content:
                 st.markdown("**Extras**")
                 smart_input("Custo Recria/Sal (R$)", "Custo_Recria_Fixo")
                 
-                # Silagem apenas visual
+                # Silagem Display
                 st.caption("Silagem (Ref Kg/dia)")
                 c3, c4 = st.columns(2)
                 with c3: smart_input("Lac", "Kg_Sil_Lac", 1.0, "%.0f")
@@ -300,7 +312,7 @@ with col_content:
         saldo_op = fat_liq - desembolso_op
         
         prov_silagem = get("Prov_Silagem")
-        prov_financ = get("Prov_Financ")
+        prov_financ = get("in_Prov_Financ") # Chave correta
         prov_adubo = get("Prov_Adubo")
         
         # Total Provisionar (Inclui Encargos Novamente)
@@ -308,10 +320,11 @@ with col_content:
         lucro = saldo_op - total_prov
 
         # 6. INDICADORES
-        deprec = get("Deprec_Total")
+        deprec = st.session_state.get('in_Deprec_Total', 2000.0)
         ebitda = lucro + deprec + prov_financ
         
         custo_saidas = desembolso_op + total_prov
+        # Safe Div
         custo_litro = custo_saidas / prod_entregue_mes if prod_entregue_mes > 0 else 0
         endividamento = (prov_financ / fat_bruto * 100) if fat_bruto > 0 else 0
         
@@ -342,7 +355,7 @@ with col_content:
                 <div class='result-row'><span>GEA</span><span class='result-val'>R$ {fmt(get("Custo_GEA"))}</span></div>
                 <div class='result-row'><span>Lojas Agropec.</span><span class='result-val'>R$ {fmt(get("Custo_Lojas"))}</span></div>
                 <div class='result-row'><span>Alta Genetics</span><span class='result-val'>R$ {fmt(get("Custo_Alta"))}</span></div>
-                <div class='result-row'><span>Pessoal (c/ Encargos)</span><span class='result-val'>R$ {fmt(custo_pessoal_total)}</span></div>
+                <div class='result-row'><span>Pessoal (+ Encargos)</span><span class='result-val'>R$ {fmt(custo_pessoal_total)}</span></div>
                 <div class='result-row'><span>Outros</span><span class='result-val'>R$ {fmt(get("Custo_Outros"))}</span></div>
                 <div class='result-row' style='border-top:1px solid #ccc; margin-top:5px'><span><b>TOTAL</b></span><span class='result-val'><b>R$ {fmt(desembolso_op)}</b></span></div>
             </div>""", unsafe_allow_html=True)
