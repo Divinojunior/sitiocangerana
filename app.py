@@ -6,7 +6,7 @@ import os
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Sítio Cangerana", layout="wide")
 
-# CSS
+# CSS Otimizado
 st.markdown("""
 <style>
     [data-testid="stNumberInput"] input { padding: 0px 5px; font-size: 14px; height: 30px; }
@@ -16,6 +16,8 @@ st.markdown("""
     .result-val { font-weight: bold; color: #0044cc; text-align: right; }
     .sub-group { background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #dee2e6; }
     h5 { color: #1f2937; font-size: 15px; font-weight: 700; margin-bottom: 12px; border-bottom: 2px solid #e5e7eb; padding-bottom: 5px; }
+    
+    /* Destaques Fluxo de Caixa */
     .fc-main { font-weight: bold; font-size: 14px; color: #1565c0; margin-top: 5px; background-color: #e3f2fd; padding: 5px; border-radius: 4px; }
     .fc-sub { padding-left: 20px; font-size: 13px; color: #555; border-left: 2px solid #eee; }
     .fc-total { font-weight: bold; font-size: 16px; background-color: #d1e7dd; padding: 10px; border-radius: 4px; margin-top: 10px; color: #0f5132; border: 1px solid #badbcc; }
@@ -195,17 +197,21 @@ with col_content:
         st.header(f"📊 Resultado: {selected_scenario}")
         def get(k): return st.session_state.get(f"in_{k}", 0.0)
 
-        # 1. CÁLCULOS GERAIS
+        # ============================================
+        # MOTOR DE CÁLCULO V20 (Corrigido)
+        # ============================================
+
+        # 1. PRODUÇÃO
         vacas_lac = get("Qtd. Vacas em lactação")
-        prod_dia = vacas_lac * get("Litros/vaca")
-        consumo_int = get("Qtd_Bezerras_Amam") * get("Leite_Bezerra_Dia")
+        prod_teorica_dia = vacas_lac * get("Litros/vaca")
+        consumo_interno_dia = get("Qtd_Bezerras_Amam") * get("Leite_Bezerra_Dia")
         
-        prod_entregue_dia = prod_dia - consumo_int
+        prod_entregue_dia = prod_teorica_dia - consumo_interno_dia
         prod_entregue_mes = prod_entregue_dia * 30
         prod_entregue_x2 = prod_entregue_dia * 2 
         
         faturamento_bruto = prod_entregue_mes * get("Preço do leite")
-        impostos = faturamento_bruto * 0.015
+        impostos = faturamento_bruto * 0.015 
         faturamento_liquido = faturamento_bruto - impostos
 
         # 2. PESSOAL
@@ -234,15 +240,14 @@ with col_content:
         total_prov = prov_silagem + prov_financ + prov_adubo + encargos
         lucro = saldo_op - total_prov
 
-        # 5. INDICADORES
+        # 5. INDICADORES (Safe Division)
         deprec = st.session_state.get('deprec_total', 2000.0)
         ebitda = lucro + deprec + prov_financ
         
         custo_saidas = desembolso_op + total_prov
-        # Safe Division: Evita divisão por zero se produção for 0
         custo_litro = custo_saidas / prod_entregue_mes if prod_entregue_mes > 0 else 0
         
-        # Endividamento %: (Financ / Fat. Bruto)
+        # Endividamento
         endividamento_pct = (prov_financ / faturamento_bruto * 100) if faturamento_bruto > 0 else 0
         
         custo_var = total_concentrado + custo_polpa + prov_silagem
@@ -294,7 +299,9 @@ with col_content:
             st.markdown(f"""<div class='sub-group'>
                 <div class='result-row'><span>Vacas Lactação</span><span class='result-val'>{fmt_int(vacas_lac)}</span></div>
                 <div class='result-row'><span>Litros/Vaca</span><span class='result-val'>{get("Litros/vaca"):.1f}</span></div>
-                <div class='result-row'><span>Prod. Prevista</span><span class='result-val'>{fmt_int(prod_teorica_dia*30)} L</span></div>
+                <div class='result-row'><span>Prod. Teórica (Dia)</span><span class='result-val'>{fmt_int(prod_teorica_dia)} L</span></div>
+                <div class='result-row'><span>Prod. Prevista (Mês)</span><span class='result-val'>{fmt_int(prod_teorica_dia*30)} L</span></div>
+                <div class='result-row'><span>(-) Consumo Bezerras</span><span class='result-val'>- {fmt_int(consumo_interno_dia*30)} L</span></div>
                 <div class='result-row' style='font-weight:bold'><span>Prod. Entregue Mês</span><span class='result-val'>{fmt_int(prod_entregue_mes)} L</span></div>
             </div>""", unsafe_allow_html=True)
             
